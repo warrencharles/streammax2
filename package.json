@@ -1,0 +1,11 @@
+{
+  "name": "streammax",
+  "version": "1.0.0",
+  "description": "Prince TV & Fawa Sports Web Streaming App",
+  "scripts": {
+    "start": "npx serve ."
+  },
+  "keywords": ["iptv", "streaming", "fawa", "sports", "vercel"],
+  "author": "",
+  "license": "MIT"
+}
