@@ -1,11 +1,19 @@
 {
   "name": "streammax",
   "version": "1.0.0",
-  "description": "Prince TV & Fawa Sports Web Streaming App",
+  "type": "module",
+  "private": true,
+  "description": "Prince TV & Fawa Sports Web Streaming App with DASH & ClearKey DRM Support",
   "scripts": {
-    "start": "npx serve ."
+    "start": "node server.js",
+    "dev": "node server.js"
   },
-  "keywords": ["iptv", "streaming", "fawa", "sports", "vercel"],
-  "author": "",
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["iptv", "streaming", "azam", "fawa", "sports", "dash", "clearkey", "vercel"],
   "license": "MIT"
 }

@@ -32,35 +32,78 @@ async function loadPrinceTV() {
     princeMap.set(normalized.id, normalized);
   }
 
+  let loadedViaApi = false;
+
+  // Try API (either custom URL or local /api on Vercel/same-origin)
   try {
-    if (settings.princeApiUrl) {
-      if (modeBadge) {
-        modeBadge.textContent = 'Prince API Proxy';
-        modeBadge.className = 'px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-medium text-emerald-400';
+    const base = settings.princeApiUrl || '';
+    const res = await fetch(`${base}/api/channels`, { signal: AbortSignal.timeout(6000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && Array.isArray(data.channels) && data.channels.length) {
+        ingestApiChannels(data.channels);
+        loadedViaApi = true;
+        if (modeBadge) {
+          modeBadge.textContent = 'Prince TV API (DASH Ready)';
+          modeBadge.className = 'px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-medium text-emerald-400';
+        }
       }
-      await loadPrinceFromCustomApi();
-    } else {
+    }
+  } catch (err) {
+    console.warn('API channels catalog not available, falling back to direct worker:', err.message);
+  }
+
+  // Fallback to direct worker if API is not active
+  if (!loadedViaApi) {
+    try {
       if (modeBadge) {
         modeBadge.textContent = 'Direct Upstream';
         modeBadge.className = 'px-2.5 py-0.5 rounded-full bg-slate-900 border border-slate-800 text-[11px] font-medium text-brand-400';
       }
       await loadPrinceFromDirectWorker();
+    } catch (err) {
+      console.error('Prince TV load error:', err);
+      showToast('Upstream fetch failed — showing curated channels', 'warning');
     }
-  } catch (err) {
-    console.error('Prince TV load error:', err);
-    showToast('Upstream fetch failed — showing curated channels', 'warning');
-  } finally {
-    princeAllList = Array.from(princeMap.values());
-    const countBadge = document.getElementById('badgePrinceCount');
-    if (countBadge) countBadge.textContent = princeAllList.length;
-    populatePrinceSelects();
-    if (loader) loader.classList.add('hidden');
-    applyPrinceFilters();
+  }
+
+  princeAllList = Array.from(princeMap.values());
+  const countBadge = document.getElementById('badgePrinceCount');
+  if (countBadge) countBadge.textContent = princeAllList.length;
+  populatePrinceSelects();
+  if (loader) loader.classList.add('hidden');
+  applyPrinceFilters();
+}
+
+function ingestApiChannels(channels) {
+  for (const ch of channels) {
+    if (!ch.id) continue;
+    // Don't overwrite curated channels unless desired
+    if (princeMap.has(ch.id)) continue;
+
+    const isDash = ch.type === 'dash';
+    princeMap.set(ch.id, {
+      id: ch.id,
+      name: ch.name || ch.id,
+      country: 'TZ',
+      countryName: ch.category === 'sports' ? 'Sports' : (ch.category || 'Global'),
+      categories: [ch.category || 'general'],
+      logo: ch.logo || '',
+      custom: false,
+      featured: ch.name.toLowerCase().includes('azam'),
+      type: ch.type || 'hls',
+      free: ch.free,
+      resolveUrl: true,
+      streams: [{
+        url: '',
+        title: isDash ? 'DASH' : 'HLS',
+        type: ch.type || 'hls'
+      }]
+    });
   }
 }
 
 async function loadPrinceFromDirectWorker() {
-  // Fetch channels.json, streams.json, countries.json in parallel
   const [chRes, stRes, coRes] = await Promise.all([
     fetch(`${WORKER_BASE}/channels.json`),
     fetch(`${WORKER_BASE}/streams.json`),
@@ -82,18 +125,17 @@ async function loadPrinceFromDirectWorker() {
     }
   }
 
-  // Group streams by channel ID
   const streamsByChannel = new Map();
   for (const s of streams) {
     if (!s.channel || !s.url) continue;
     if (!streamsByChannel.has(s.channel)) streamsByChannel.set(s.channel, []);
     streamsByChannel.get(s.channel).push({
       url: s.url,
-      title: s.quality || (s.url.startsWith('https://') ? 'HTTPS' : 'HTTP')
+      title: s.quality || (s.url.startsWith('https://') ? 'HTTPS' : 'HTTP'),
+      type: s.url.includes('.mpd') ? 'dash' : 'hls'
     });
   }
 
-  // Join streams onto channels
   for (const ch of channels) {
     const chStreams = streamsByChannel.get(ch.id);
     if (!chStreams || !chStreams.length) continue;
@@ -109,55 +151,9 @@ async function loadPrinceFromDirectWorker() {
       logo: ch.logo || '',
       custom: false,
       featured: false,
+      resolveUrl: false,
       streams: sortStreamsHttpsFirst(chStreams)
     });
-  }
-}
-
-async function loadPrinceFromCustomApi() {
-  const headers = settings.princeApiKey ? { 'x-api-key': settings.princeApiKey } : {};
-  const base = settings.princeApiUrl;
-  const firstRes = await fetch(`${base}/api/v1/channels?limit=100&page=1&include=streams`, { headers });
-  if (!firstRes.ok) throw new Error(`API ${firstRes.status}`);
-  const firstData = await firstRes.json();
-
-  const ingest = (items) => {
-    for (const ch of items || []) {
-      if (!ch.streams || !ch.streams.length) continue;
-      const mappedStreams = ch.streams.map((s, idx) => ({
-        url: s.url,
-        proxyUrl: `${base}/api/v1/stream/${encodeURIComponent(ch.id)}?i=${s.index ?? idx}${settings.princeApiKey ? `&key=${encodeURIComponent(settings.princeApiKey)}` : ''}`,
-        title: s.quality || `Stream ${idx + 1}`
-      }));
-      princeMap.set(ch.id, {
-        id: ch.id,
-        name: ch.name || ch.id,
-        country: (ch.country || '').toUpperCase(),
-        countryName: ch.country || 'International',
-        categories: Array.isArray(ch.categories) && ch.categories.length ? ch.categories : ['general'],
-        logo: ch.logo || '',
-        custom: Boolean(ch.custom),
-        featured: Boolean(ch.featured),
-        streams: sortStreamsHttpsFirst(mappedStreams)
-      });
-    }
-  };
-
-  ingest(firstData.items);
-
-  // Fetch up to 10 pages in background batches so UI renders immediately
-  const totalPages = Math.min(firstData.pages || 1, 15);
-  for (let p = 2; p <= totalPages; p += 3) {
-    const batch = [];
-    for (let k = p; k < p + 3 && k <= totalPages; k++) {
-      batch.push(
-        fetch(`${base}/api/v1/channels?limit=100&page=${k}&include=streams`, { headers })
-          .then((r) => (r.ok ? r.json() : null))
-          .then((d) => d && ingest(d.items))
-          .catch(() => {})
-      );
-    }
-    await Promise.all(batch);
   }
 }
 
@@ -210,7 +206,7 @@ function applyPrinceFilters() {
     if (country && ch.country !== country) return false;
     if (category && !(ch.categories || []).some((c) => c.toLowerCase() === category)) return false;
 
-    if (princeChip === 'https' && !ch.streams.some((s) => /^https:\/\//i.test(s.proxyUrl || s.url))) return false;
+    if (princeChip === 'https' && !ch.streams.some((s) => !s.url || /^https:\/\//i.test(s.proxyUrl || s.url))) return false;
     if (princeChip === 'custom' && !ch.custom) return false;
     if (princeChip === 'featured' && !ch.featured) return false;
     if (princeChip === 'favorites' && !favorites.has(ch.id)) return false;
@@ -259,7 +255,8 @@ function renderPrinceChunk(size) {
   const frag = document.createDocumentFragment();
   for (const ch of slice) {
     const isFav = favorites.has(ch.id);
-    const hasHttps = ch.streams.some((s) => /^https:\/\//i.test(s.proxyUrl || s.url));
+    const isDash = ch.type === 'dash';
+    const hasHttps = ch.streams.some((s) => !s.url || /^https:\/\//i.test(s.proxyUrl || s.url));
     const card = document.createElement('div');
     card.setAttribute('data-channel-id', ch.id);
     card.className = 'group bg-[#111827] hover:bg-slate-800/90 border border-slate-800/80 hover:border-brand-500/50 rounded-xl p-3 flex flex-col justify-between gap-2.5 cursor-pointer transition active:scale-[0.98] relative overflow-hidden';
@@ -279,8 +276,8 @@ function renderPrinceChunk(size) {
         <h3 class="text-xs font-bold text-slate-100 group-hover:text-brand-400 truncate">${escapeHtml(ch.name)}</h3>
         <div class="flex items-center justify-between gap-1 text-[10px] text-slate-400">
           <span class="truncate">${escapeHtml(ch.countryName || ch.country || 'Global')}</span>
-          <span class="px-1.5 py-0.5 rounded font-mono text-[9px] shrink-0 ${hasHttps ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}">
-            ${hasHttps ? 'HTTPS' : 'HTTP'}
+          <span class="px-1.5 py-0.5 rounded font-mono text-[9px] shrink-0 ${isDash ? 'bg-purple-500/20 text-purple-300 font-bold' : hasHttps ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}">
+            ${isDash ? 'DASH' : hasHttps ? 'HTTPS' : 'HTTP'}
           </span>
         </div>
       </div>

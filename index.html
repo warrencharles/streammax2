@@ -26,9 +26,10 @@
     };
   </script>
 
-  <!-- Pinned Stable Media Engines -->
+  <!-- Media Playback Engines (HLS.js, MPEG-TS, Shaka Player for DASH/ClearKey) -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/shaka-player@4.16.4/dist/shaka-player.compiled.js"></script>
   <!-- Font Awesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 
@@ -96,7 +97,7 @@
         <div class="relative flex-1">
           <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
           <input id="searchInput" type="search" oninput="onSearchInput(this.value)"
-            placeholder="Search channels, countries, matches, leagues..."
+            placeholder="Search channels (e.g. Azam), countries, matches..."
             class="w-full bg-slate-900/90 border border-slate-800 rounded-xl pl-9 pr-9 py-2 text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-brand-500 focus:ring-1 focus:ring-brand-500">
           <button id="btnClearSearch" type="button" onclick="clearSearch()"
             class="hidden absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1">
@@ -342,8 +343,8 @@
               <i class="fa-solid fa-window-maximize mr-1"></i> Embed Player
             </button>
             <button id="btnErrSettings" type="button" onclick="closePlayerModal(); openSettingsModal();"
-              class="hidden px-3.5 py-2 rounded-xl bg-fawa-600 hover:bg-fawa-500 text-white text-xs font-semibold">
-              <i class="fa-solid fa-gear mr-1"></i> Open Settings to Connect Fawa API
+              class="hidden px-3.5 py-2 rounded-xl bg-brand-500 hover:bg-brand-600 text-white text-xs font-semibold">
+              <i class="fa-solid fa-gear mr-1"></i> Open Settings to Set Token
             </button>
             <button type="button" onclick="copyCurrentStreamUrl()"
               class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold">
@@ -385,18 +386,28 @@
 
       <div class="p-5 overflow-y-auto space-y-5 text-xs">
         <p class="text-slate-400 leading-relaxed">
-          Leave API URLs empty to use <strong class="text-slate-200">Direct Upstream Mode</strong>. To unlock proxied streams and Fawa Sports playback without CDN/CORS blocks, enter your deployed HTTPS API URLs below.
+          Configure Prince TV session tokens (for Azam Sports &amp; DASH ClearKey decryption) and custom API proxies.
         </p>
 
-        <!-- Prince TV API Settings -->
+        <!-- Prince TV Session Token & Credentials -->
         <div class="bg-slate-950/70 border border-slate-800 rounded-xl p-4 space-y-3">
           <div class="flex items-center justify-between">
-            <span class="font-bold text-brand-400"><i class="fa-solid fa-tv mr-1.5"></i>Prince TV API (Optional)</span>
-            <span class="text-[10px] text-slate-500">Empty = Direct Worker</span>
+            <span class="font-bold text-brand-400"><i class="fa-solid fa-key mr-1.5"></i>Prince TV Session Token</span>
+            <span class="text-[10px] text-emerald-400 font-medium">Unlocks Azam Sports</span>
           </div>
           <div>
-            <label class="block text-[11px] text-slate-300 mb-1">Prince TV API URL</label>
-            <input id="inputPrinceApiUrl" type="url" placeholder="https://your-princetv-api.onrender.com"
+            <label class="block text-[11px] text-slate-300 mb-1">
+              Session Token (<code class="font-mono text-brand-300">princeTv:sessionToken</code>)
+            </label>
+            <input id="inputPrinceSessionToken" type="password" placeholder="Paste session token from princetv.online"
+              class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-brand-500">
+            <p class="text-[10px] text-slate-500 mt-1">
+              Found in browser DevTools on princetv.online &gt; Application &gt; Local Storage &gt; <code class="text-slate-400">princeTv:sessionToken</code>.
+            </p>
+          </div>
+          <div>
+            <label class="block text-[11px] text-slate-300 mb-1">Prince TV API URL (Optional)</label>
+            <input id="inputPrinceApiUrl" type="url" placeholder="Leave empty for built-in /api endpoint"
               class="w-full bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-brand-500">
           </div>
           <div>
@@ -428,9 +439,11 @@
           </button>
         </div>
 
-        <!-- Reset Local Data (No confirm() dialog) -->
+        <!-- Links & Data reset -->
         <div class="pt-2 border-t border-slate-800 flex items-center justify-between gap-2">
-          <span class="text-slate-400">Clear saved settings, favorites &amp; recents</span>
+          <a href="/player.html" target="_blank" class="text-brand-400 hover:text-brand-300 underline text-xs">
+            Open Minimal Player <i class="fa-solid fa-arrow-up-right-from-square text-[10px] ml-1"></i>
+          </a>
           <button id="btnClearData" type="button" onclick="handleClearData()"
             class="px-3 py-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-400 font-semibold transition">
             Clear Data

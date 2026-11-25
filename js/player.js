@@ -1,13 +1,19 @@
 // ==========================================================================
-// Video & Media Player Engine
+// Video & Media Player Engine (HLS.js, MPEG-TS & Shaka Player for DASH/ClearKey)
 // ==========================================================================
 
 let hlsInstance = null;
 let mpegtsInstance = null;
-let activePlayerContext = null; // { type: 'prince'|'fawa', id, title, subtitle, streams: [{url, label, proxyUrl}], index, isEmbed, slug }
+let shakaInstance = null;
+let activePlayerContext = null; // { type: 'prince'|'fawa', id, title, subtitle, streams: [{url, label, proxyUrl, type, drm, token}], index, isEmbed, slug }
 let autoFallbackCount = 0;
 
-function openPrincePlayer(ch) {
+// Install Shaka polyfills early
+if (typeof window !== 'undefined' && window.shaka) {
+  try { window.shaka.polyfill.installAll(); } catch {}
+}
+
+async function openPrincePlayer(ch) {
   addRecent(ch.id);
   autoFallbackCount = 0;
 
@@ -16,17 +22,64 @@ function openPrincePlayer(ch) {
     id: ch.id,
     title: ch.name,
     subtitle: `${ch.countryName || ch.country || 'Global'} • ${(ch.categories || ['General']).join(', ')}`,
-    streams: ch.streams.map((s, i) => ({
+    streams: (ch.streams || []).map((s, i) => ({
       url: s.proxyUrl || s.url,
       rawUrl: s.url,
-      label: s.title || `Stream ${i + 1}`
+      label: s.title || `Stream ${i + 1}`,
+      type: s.type || ch.type || 'hls',
+      drm: s.drm || null,
+      token: s.token || null,
+      headers: s.headers || null
     })),
     index: 0,
-    isEmbed: false
+    isEmbed: false,
+    channel: ch
   };
 
   setupPlayerModalChrome();
+
+  // If this channel needs dynamic stream resolution from /api/channels/:id/stream
+  if (ch.resolveUrl || (!activePlayerContext.streams.length && ch.id)) {
+    showPlayerLoading(`Resolving stream for ${ch.name}...`);
+    try {
+      const resolved = await resolveChannelStream(ch.id);
+      activePlayerContext.streams = [{
+        url: resolved.url || resolved.proxyUrl,
+        rawUrl: resolved.source || resolved.url,
+        label: resolved.type === 'dash' ? 'DASH (ClearKey)' : 'HD',
+        type: resolved.type || 'hls',
+        drm: resolved.drm || null,
+        token: resolved.token || null,
+        headers: resolved.headers || null
+      }];
+      renderPlayerStreamPills();
+      playContextStream(0);
+    } catch (err) {
+      showPlayerError(
+        'Stream Resolution Failed',
+        err.message || 'Could not resolve channel stream. Check if session token is needed.'
+      );
+    }
+    return;
+  }
+
   playContextStream(0);
+}
+
+async function resolveChannelStream(channelId) {
+  const base = settings.princeApiUrl || '';
+  const token = settings.princeSessionToken || '';
+  const headers = {};
+  if (token) headers['x-ptv-token'] = token;
+  if (settings.princeApiKey) headers['x-api-key'] = settings.princeApiKey;
+
+  const res = await fetch(`${base}/api/channels/${encodeURIComponent(channelId)}/stream`, { headers });
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = (data.error || 'Stream unavailable') + (data.hint ? ` — ${data.hint}` : '');
+    throw new Error(msg);
+  }
+  return data;
 }
 
 async function openFawaPlayer(match) {
@@ -53,7 +106,8 @@ async function openFawaPlayer(match) {
       activePlayerContext.streams = (data.streams || []).map((s, i) => ({
         url: s.proxyUrl || s.url,
         rawUrl: s.url,
-        label: s.label || `CH ${i + 1}`
+        label: s.label || `CH ${i + 1}`,
+        type: 'hls'
       }));
     } else {
       const html = await fetchHtmlViaCorsCascade(match.url);
@@ -61,7 +115,8 @@ async function openFawaPlayer(match) {
       activePlayerContext.streams = urls.map((u, i) => ({
         url: u,
         rawUrl: u,
-        label: `CH ${i + 1}`
+        label: `CH ${i + 1}`,
+        type: 'hls'
       }));
     }
 
@@ -144,6 +199,10 @@ function teardownMedia() {
     try { mpegtsInstance.destroy(); } catch {}
     mpegtsInstance = null;
   }
+  if (shakaInstance) {
+    try { shakaInstance.destroy(); } catch {}
+    shakaInstance = null;
+  }
   const video = document.getElementById('videoEl');
   if (video) {
     video.pause();
@@ -157,7 +216,7 @@ function teardownMedia() {
   }
 }
 
-function playContextStream(index) {
+async function playContextStream(index) {
   const ctx = activePlayerContext;
   if (!ctx || !ctx.streams[index]) return;
   ctx.index = index;
@@ -180,12 +239,16 @@ function playContextStream(index) {
   document.getElementById('tapToPlayOverlay').classList.add('hidden');
   showPlayerLoading(`Connecting to ${stream.label}...`);
 
+  const isDash = stream.type === 'dash' || /\.mpd(\?|$)/i.test(url);
+  const isTsFlv = !isDash && /\.(ts|flv)(\?|$)/i.test(url);
+  const isHls = !isDash && !isTsFlv;
+
   document.getElementById('playerStreamStatus').textContent = `Playing ${stream.label} (${index + 1}/${ctx.streams.length})`;
-  document.getElementById('playerProtocolBadge').textContent = /^https:\/\//i.test(url) ? 'HTTPS' : 'HTTP';
+  document.getElementById('playerProtocolBadge').textContent = isDash ? 'DASH' : (/^https:\/\//i.test(url) ? 'HTTPS' : 'HTTP');
 
   // Mixed Content early detection
-  if (window.location.protocol === 'https:' && /^http:\/\//i.test(url)) {
-    handleStreamFailure('mixed_content', 'Browser blocked this HTTP stream on an HTTPS page (Mixed Content).');
+  if (window.location.protocol === 'https:' && /^http:\/\//i.test(url) && !url.includes('/api/proxy')) {
+    handleStreamFailure('mixed_content', 'Browser blocked this HTTP stream on an HTTPS page (Mixed Content). Connect your proxy in Settings.');
     return;
   }
 
@@ -194,15 +257,82 @@ function playContextStream(index) {
   video.playsInline = true;
   document.getElementById('btnUnmute').classList.remove('hidden');
 
-  const isTsFlv = /\.(ts|flv)(\?|$)/i.test(url);
-  const isHls = !isTsFlv && (/\.m3u8(\?|$)/i.test(url) || url.includes('/api/v1/stream/') || url.includes('/api/v1/proxy') || !/\.(mp4|webm)(\?|$)/i.test(url));
+  // ==================== DASH PLAYBACK (Shaka Player) ====================
+  if (isDash) {
+    if (window.shaka && shaka.Player.isBrowserSupported()) {
+      try {
+        shaka.polyfill.installAll();
+        shakaInstance = new shaka.Player(video);
 
-  if (isHls && window.Hls && Hls.isSupported()) {
+        const shakaConfig = {
+          manifest: {
+            dash: { ignoreMinBufferTime: true }
+          },
+          streaming: {
+            bufferingGoal: 2,
+            rebufferingGoal: 1,
+            bufferBehind: 10,
+            jumpLargeGaps: true,
+            retryParameters: { maxAttempts: 5, baseDelay: 200, backoffFactor: 2, timeout: 15000 }
+          }
+        };
+
+        // ClearKey DRM configuration
+        if (stream.drm) {
+          shakaConfig.drm = { clearKeys: stream.drm };
+        }
+
+        shakaInstance.configure(shakaConfig);
+
+        // Optional token injection
+        if (stream.token) {
+          shakaInstance.getNetworkingEngine().registerRequestFilter((type, req) => {
+            if (req.uris && req.uris.length) {
+              try {
+                const u = new URL(req.uris[0]);
+                if (!u.searchParams.has('token')) {
+                  u.searchParams.set('token', stream.token);
+                  req.uris[0] = u.href;
+                }
+              } catch {}
+            }
+          });
+        }
+
+        shakaInstance.addEventListener('error', (event) => {
+          console.error('Shaka player error:', event.detail);
+          const code = event.detail?.code;
+          if (code === 6001 || code === 6002) {
+            handleStreamFailure('drm_error', 'DRM ClearKey rejected. Check session token.');
+          } else {
+            handleStreamFailure('dash_error', event.detail?.message || 'DASH stream playback error');
+          }
+        });
+
+        await shakaInstance.load(url);
+        hidePlayerLoading();
+        attemptPlay(video);
+      } catch (err) {
+        handleStreamFailure('dash_load_failed', err.message || 'Shaka failed to load DASH stream');
+      }
+    } else {
+      handleStreamFailure('unsupported', 'This browser does not support MPEG-DASH / MediaSource.');
+    }
+  }
+  // ==================== HLS PLAYBACK (Hls.js) ====================
+  else if (isHls && window.Hls && Hls.isSupported()) {
     hlsInstance = new Hls({
       lowLatencyMode: true,
       enableWorker: true,
       manifestLoadingTimeOut: 12000,
-      levelLoadingTimeOut: 12000
+      levelLoadingTimeOut: 12000,
+      xhrSetup: (xhr) => {
+        if (stream.headers) {
+          for (const [k, v] of Object.entries(stream.headers)) {
+            try { xhr.setRequestHeader(k, v); } catch {}
+          }
+        }
+      }
     });
     hlsInstance.loadSource(url);
     hlsInstance.attachMedia(video);
@@ -230,7 +360,9 @@ function playContextStream(index) {
       attemptPlay(video);
     };
     video.onerror = () => handleStreamFailure('offline', 'Native HLS playback failed.');
-  } else if (isTsFlv && window.mpegts && mpegts.isSupported()) {
+  } 
+  // ==================== MPEG-TS / FLV PLAYBACK ====================
+  else if (isTsFlv && window.mpegts && mpegts.isSupported()) {
     mpegtsInstance = mpegts.createPlayer({ type: url.includes('.flv') ? 'flv' : 'mpegts', isLive: true, url });
     mpegtsInstance.attachMediaElement(video);
     mpegtsInstance.load();
@@ -291,6 +423,9 @@ function handleStreamFailure(reason, detail) {
   } else if (reason === 'mixed_content') {
     title = 'Blocked: HTTP Stream on HTTPS Page';
     msg = 'Browsers block insecure http:// streams on https:// pages. Try an HTTPS Ready channel, connect your HTTPS API proxy, or copy the URL for VLC.';
+  } else if (reason === 'drm_error' || detail?.includes('No usable credentials') || detail?.includes('sessionToken')) {
+    title = 'Session Token Required for Premium Stream';
+    msg = 'This channel (such as Azam Sports) requires a Prince TV session token. Go to Settings and paste your session token from princetv.online.';
   }
 
   showPlayerError(title, msg);
@@ -344,7 +479,7 @@ function showPlayerError(title, desc) {
   const hasNext = ctx && ctx.index + 1 < ctx.streams.length;
   document.getElementById('btnErrNextStream').classList.toggle('hidden', !hasNext);
   document.getElementById('btnErrEmbed').classList.toggle('hidden', !(ctx && ctx.type === 'fawa' && settings.fawaApiUrl));
-  document.getElementById('btnErrSettings').classList.toggle('hidden', !(ctx && ctx.type === 'fawa' && !settings.fawaApiUrl));
+  document.getElementById('btnErrSettings').classList.toggle('hidden', !(ctx && (ctx.type === 'fawa' && !settings.fawaApiUrl || desc.includes('session token'))));
 
   document.getElementById('playerError').classList.remove('hidden');
 }

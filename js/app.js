@@ -29,6 +29,15 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Auto-sync session token if saved
+  if (settings.princeSessionToken) {
+    fetch('/api/session/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: settings.princeSessionToken })
+    }).catch(() => {});
+  }
+
   renderChipsBar();
   loadPrinceTV();
 });
@@ -36,11 +45,13 @@ document.addEventListener('DOMContentLoaded', () => {
 function syncSettingsInputs() {
   const pUrl = document.getElementById('inputPrinceApiUrl');
   const pKey = document.getElementById('inputPrinceApiKey');
+  const pToken = document.getElementById('inputPrinceSessionToken');
   const fUrl = document.getElementById('inputFawaApiUrl');
   const fKey = document.getElementById('inputFawaApiKey');
 
   if (pUrl) pUrl.value = settings.princeApiUrl;
   if (pKey) pKey.value = settings.princeApiKey;
+  if (pToken) pToken.value = settings.princeSessionToken;
   if (fUrl) fUrl.value = settings.fawaApiUrl;
   if (fKey) fKey.value = settings.fawaApiKey;
 }
@@ -236,18 +247,32 @@ function closeSettingsModal() {
 function saveSettings() {
   const pUrl = document.getElementById('inputPrinceApiUrl');
   const pKey = document.getElementById('inputPrinceApiKey');
+  const pToken = document.getElementById('inputPrinceSessionToken');
   const fUrl = document.getElementById('inputFawaApiUrl');
   const fKey = document.getElementById('inputFawaApiKey');
 
   settings.princeApiUrl = pUrl ? pUrl.value.trim().replace(/\/+$/, '') : '';
   settings.princeApiKey = pKey ? pKey.value.trim() : '';
+  settings.princeSessionToken = pToken ? pToken.value.trim() : '';
   settings.fawaApiUrl = fUrl ? fUrl.value.trim().replace(/\/+$/, '') : '';
   settings.fawaApiKey = fKey ? fKey.value.trim() : '';
 
   localStorage.setItem('ptv_prince_api_url', settings.princeApiUrl);
   localStorage.setItem('ptv_prince_api_key', settings.princeApiKey);
+  localStorage.setItem('princeTv:sessionToken', settings.princeSessionToken);
+  localStorage.setItem('ptv_session_token', settings.princeSessionToken);
   localStorage.setItem('ptv_fawa_api_url', settings.fawaApiUrl);
   localStorage.setItem('ptv_fawa_api_key', settings.fawaApiKey);
+
+  // If token was set, post to server session endpoint as well
+  if (settings.princeSessionToken) {
+    const base = settings.princeApiUrl || '';
+    fetch(`${base}/api/session/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: settings.princeSessionToken })
+    }).catch(() => {});
+  }
 
   closeSettingsModal();
   showToast('Settings saved', 'success');
@@ -289,6 +314,7 @@ function handleClearData() {
   recents = [];
   settings.princeApiUrl = '';
   settings.princeApiKey = '';
+  settings.princeSessionToken = '';
   settings.fawaApiUrl = '';
   settings.fawaApiKey = '';
   closeSettingsModal();

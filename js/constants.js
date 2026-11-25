@@ -67,26 +67,6 @@ const CURATED_CUSTOM_CHANNELS = [
     streams: [{ url: 'https://dwamdstream102.akamaized.net/hls/live/2015525/dwstream102/index.m3u8', title: 'HD' }]
   },
   {
-    id: 'custom-azam-sports-1', name: 'Azam Sports 1 HD', country: 'TZ', countryName: 'Tanzania',
-    categories: ['sports'], custom: true, featured: true,
-    streams: [{ url: 'https://azam1.stream/live.m3u8', title: 'HD' }]
-  },
-  {
-    id: 'custom-azam-sports-2', name: 'Azam Sports 2 HD', country: 'TZ', countryName: 'Tanzania',
-    categories: ['sports'], custom: true, featured: false,
-    streams: [{ url: 'https://azam2.stream/live.m3u8', title: 'HD' }]
-  },
-  {
-    id: 'custom-azam-sports-3', name: 'Azam Sports 3 HD', country: 'TZ', countryName: 'Tanzania',
-    categories: ['sports'], custom: true, featured: false,
-    streams: [{ url: 'https://azam3.stream/live.m3u8', title: 'HD' }]
-  },
-  {
-    id: 'custom-azam-sports-4', name: 'Azam Sports 4 HD', country: 'TZ', countryName: 'Tanzania',
-    categories: ['sports'], custom: true, featured: false,
-    streams: [{ url: 'https://azam4.stream/live.m3u8', title: 'HD' }]
-  },
-  {
     id: 'custom-sinema-zetu', name: 'Sinema Zetu', country: 'TZ', countryName: 'Tanzania',
     categories: ['movies'], custom: true, featured: false,
     streams: [{ url: 'https://sinemazetu.stream/live.m3u8', title: 'HD' }]
@@ -98,10 +78,11 @@ const CURATED_CUSTOM_CHANNELS = [
   }
 ];
 
-// Persisted settings (NEVER default to localhost)
+// Persisted settings (defaults to built-in /api endpoint if on same origin)
 const settings = {
   princeApiUrl: (localStorage.getItem('ptv_prince_api_url') || '').trim().replace(/\/+$/, ''),
   princeApiKey: (localStorage.getItem('ptv_prince_api_key') || '').trim(),
+  princeSessionToken: (localStorage.getItem('princeTv:sessionToken') || localStorage.getItem('ptv_session_token') || '').trim(),
   fawaApiUrl: (localStorage.getItem('ptv_fawa_api_url') || '').trim().replace(/\/+$/, ''),
   fawaApiKey: (localStorage.getItem('ptv_fawa_api_key') || '').trim()
 };

@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prince TV — Open Player</title>
+<style>
+  body{margin:0;background:#0a0e27;color:#fff;font:14px system-ui,sans-serif}
+  header{display:flex;gap:8px;padding:10px;align-items:center}
+  input,button{background:#151a3a;color:#fff;border:1px solid #2a3160;border-radius:8px;padding:8px}
+  main{display:grid;grid-template-columns:320px 1fr;gap:12px;padding:0 12px 12px;height:calc(100vh - 56px)}
+  #list{overflow:auto;border:1px solid #2a3160;border-radius:10px}
+  .ch{display:flex;gap:8px;padding:6px;cursor:pointer;border-bottom:1px solid #1a2045}
+  .ch:hover{background:#151a3a}
+  .ch img{width:36px;height:36px;object-fit:cover;border-radius:6px;background:#222}
+  .ch small{color:#8b93c0;display:block}
+  video{width:100%;max-height:75vh;background:#000;border-radius:10px}
+  #stage{display:flex;flex-direction:column;gap:8px}
+  #status{color:#8b93c0;font-size:12px;word-break:break-all}
+  .badge-dash{background:#7c3aed;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px}
+  .badge-hls{background:#2563eb;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/shaka-player@4.16.4/dist/shaka-player.compiled.js"></script>
+</head>
+<body>
+<header>
+  <strong>Prince TV</strong>
+  <input id="q" placeholder="Search channels (e.g. Azam)" style="flex:1">
+  <button id="tokenBtn">Set Session Token</button>
+</header>
+<main>
+  <div id="list"></div>
+  <div id="stage">
+    <video id="v" controls playsinline></video>
+    <div id="status">Ready</div>
+  </div>
+</main>
+<script>
+const list = document.getElementById('list'), v = document.getElementById('v'), status = document.getElementById('status');
+let hlsInstance = null, shakaPlayer = null, allChannels = [];
+
+// Install Shaka polyfills early
+if (window.shaka) {
+  shaka.polyfill.installAll();
+}
+
+async function syncSavedToken() {
+  const token = localStorage.getItem('princeTv:sessionToken');
+  if (token) {
+    try {
+      await fetch('/api/session/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+      status.textContent = 'Active session token loaded.';
+    } catch {}
+  }
+}
+
+async function load(q = '') {
+  try {
+    const r = await fetch('/api/channels' + (q ? `?search=${encodeURIComponent(q)}` : ''));
+    const { channels } = await r.json();
+    allChannels = channels || [];
+    list.innerHTML = allChannels.map(c => `
+      <div class="ch" data-id="${c.id}">
+        <img src="${c.logo || ''}" onerror="this.style.visibility='hidden'">
+        <div>
+          <strong>${c.name}</strong>
+          <small>${c.category || 'General'} · <span class="${c.type === 'dash' ? 'badge-dash' : 'badge-hls'}">${c.type.toUpperCase()}</span>${c.free ? ' · FREE' : ''}</small>
+        </div>
+      </div>
+    `).join('');
+  } catch (err) {
+    status.textContent = 'Failed to load channels: ' + err.message;
+  }
+}
+
+list.onclick = (e) => {
+  const el = e.target.closest('.ch');
+  if (el) play(el.dataset.id);
+};
+
+function stop() {
+  if (hlsInstance) {
+    try { hlsInstance.destroy(); } catch {}
+    hlsInstance = null;
+  }
+  if (shakaPlayer) {
+    try { shakaPlayer.destroy(); } catch {}
+    shakaPlayer = null;
+  }
+  v.pause();
+  v.removeAttribute('src');
+  v.load();
+}
+
+async function play(id) {
+  stop();
+  status.textContent = 'Resolving channel stream…';
+  
+  const savedToken = localStorage.getItem('princeTv:sessionToken') || '';
+  const headers = savedToken ? { 'x-ptv-token': savedToken } : {};
+
+  try {
+    const r = await fetch(`/api/channels/${id}/stream`, { headers });
+    const data = await r.json();
+    
+    if (!r.ok) {
+      status.textContent = (data.error || 'Stream error') + (data.hint ? ' — ' + data.hint : '');
+      return;
+    }
+
+    status.textContent = `Streaming ${data.channel?.name || id} via ${data.via || 'api'} (${data.type.toUpperCase()})`;
+
+    // DASH Playback (Azam Sports & MPD streams)
+    if (data.type === 'dash') {
+      if (!shaka.Player.isBrowserSupported()) {
+        status.textContent = 'Browser does not support DASH playback';
+        return;
+      }
+
+      shakaPlayer = new shaka.Player(v);
+
+      const shakaConfig = {
+        manifest: {
+          dash: { ignoreMinBufferTime: true }
+        },
+        streaming: {
+          bufferingGoal: 2,
+          rebufferingGoal: 1,
+          bufferBehind: 10,
+          jumpLargeGaps: true,
+          retryParameters: { maxAttempts: 5, baseDelay: 200, backoffFactor: 2, timeout: 15000 }
+        }
+      };
+
+      // Configure ClearKey DRM if keys are present
+      if (data.drm) {
+        shakaConfig.drm = { clearKeys: data.drm };
+      }
+
+      shakaPlayer.configure(shakaConfig);
+
+      // Handle tokenized CDN URLs if token is present
+      if (data.token) {
+        shakaPlayer.getNetworkingEngine().registerRequestFilter((type, req) => {
+          if (req.uris && req.uris.length) {
+            try {
+              const u = new URL(req.uris[0]);
+              if (!u.searchParams.has('token')) {
+                u.searchParams.set('token', data.token);
+                req.uris[0] = u.href;
+              }
+            } catch {}
+          }
+        });
+      }
+
+      shakaPlayer.addEventListener('error', (event) => {
+        console.error('Shaka player error:', event.detail);
+        status.textContent = 'Playback error: ' + (event.detail?.message || event.detail?.code || 'DASH decode error');
+      });
+
+      await shakaPlayer.load(data.url);
+      v.play().catch(() => {});
+    } 
+    // HLS Playback
+    else if (window.Hls && Hls.isSupported()) {
+      hlsInstance = new Hls({
+        lowLatencyMode: true,
+        enableWorker: true
+      });
+      hlsInstance.loadSource(data.url);
+      hlsInstance.attachMedia(v);
+      hlsInstance.on(Hls.Events.ERROR, (_, d) => {
+        if (d.fatal) status.textContent = 'HLS fatal error: ' + d.details;
+      });
+      hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+        v.play().catch(() => {});
+      });
+    } else {
+      v.src = data.url;
+      v.play().catch(() => {});
+    }
+  } catch (err) {
+    status.textContent = 'Stream resolution failed: ' + err.message;
+  }
+}
+
+document.getElementById('q').oninput = (e) => load(e.target.value);
+
+document.getElementById('tokenBtn').onclick = async () => {
+  const current = localStorage.getItem('princeTv:sessionToken') || '';
+  const token = prompt('Paste sessionToken from princetv.online (localStorage["princeTv:sessionToken"]):', current);
+  if (!token) return;
+  localStorage.setItem('princeTv:sessionToken', token.trim());
+  await fetch('/api/session/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: token.trim() })
+  });
+  status.textContent = 'Session token saved!';
+};
+
+syncSavedToken().then(() => load());
+const startId = new URLSearchParams(location.search).get('id');
+if (startId) play(startId);
+</script>
+</body>
+</html>
