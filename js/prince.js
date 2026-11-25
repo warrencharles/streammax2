@@ -34,23 +34,25 @@ async function loadPrinceTV() {
 
   let loadedViaApi = false;
 
-  // Try API (either custom URL or local /api on Vercel/same-origin)
-  try {
-    const base = settings.princeApiUrl || '';
-    const res = await fetch(`${base}/api/channels`, { signal: AbortSignal.timeout(6000) });
-    if (res.ok) {
-      const data = await res.json();
-      if (data && Array.isArray(data.channels) && data.channels.length) {
-        ingestApiChannels(data.channels);
-        loadedViaApi = true;
-        if (modeBadge) {
-          modeBadge.textContent = 'Prince TV API (DASH Ready)';
-          modeBadge.className = 'px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-medium text-emerald-400';
+  // Try API only if a custom Prince TV API URL is configured in Settings
+  if (settings.princeApiUrl) {
+    try {
+      const base = settings.princeApiUrl;
+      const res = await fetch(`${base}/api/channels`, { signal: AbortSignal.timeout(6000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && Array.isArray(data.channels) && data.channels.length) {
+          ingestApiChannels(data.channels);
+          loadedViaApi = true;
+          if (modeBadge) {
+            modeBadge.textContent = 'Prince TV API (DASH Ready)';
+            modeBadge.className = 'px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-[11px] font-medium text-emerald-400';
+          }
         }
       }
+    } catch (err) {
+      console.warn('API channels catalog not available, falling back to direct worker:', err.message);
     }
-  } catch (err) {
-    console.warn('API channels catalog not available, falling back to direct worker:', err.message);
   }
 
   // Fallback to direct worker if API is not active

@@ -29,9 +29,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Auto-sync session token if saved
-  if (settings.princeSessionToken) {
-    fetch('/api/session/token', {
+  // Auto-sync session token only if a custom Prince TV API URL is configured
+  if (settings.princeApiUrl && settings.princeSessionToken) {
+    fetch(`${settings.princeApiUrl}/api/session/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: settings.princeSessionToken })
@@ -264,10 +264,9 @@ function saveSettings() {
   localStorage.setItem('ptv_fawa_api_url', settings.fawaApiUrl);
   localStorage.setItem('ptv_fawa_api_key', settings.fawaApiKey);
 
-  // If token was set, post to server session endpoint as well
-  if (settings.princeSessionToken) {
-    const base = settings.princeApiUrl || '';
-    fetch(`${base}/api/session/token`, {
+  // If token and custom API URL were set, post to server session endpoint
+  if (settings.princeApiUrl && settings.princeSessionToken) {
+    fetch(`${settings.princeApiUrl}/api/session/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: settings.princeSessionToken })
