@@ -216,7 +216,11 @@ function teardownMedia() {
   }
 }
 
-async function playContextStream(index) {
+function buildProxyUrl(targetUrl) {
+  return `/api/proxy?url=${encodeURIComponent(targetUrl)}`;
+}
+
+async function playContextStream(index, forceProxy = false) {
   const ctx = activePlayerContext;
   if (!ctx || !ctx.streams[index]) return;
   ctx.index = index;
@@ -228,7 +232,15 @@ async function playContextStream(index) {
   }
 
   const stream = ctx.streams[index];
-  const url = stream.url;
+  const rawUrl = stream.url;
+  const isHttpsPage = window.location.protocol === 'https:';
+  const isAlreadyProxied = rawUrl.includes('/api/proxy') || rawUrl.includes('/api/v1/stream/');
+  const needsProxy = !isAlreadyProxied && window.location.protocol !== 'file:' && (
+    forceProxy || (isHttpsPage && /^http:\/\//i.test(rawUrl))
+  );
+
+  const url = needsProxy ? buildProxyUrl(rawUrl) : rawUrl;
+  stream._proxied = Boolean(needsProxy || isAlreadyProxied);
   teardownMedia();
 
   const video = document.getElementById('videoEl');
@@ -237,20 +249,16 @@ async function playContextStream(index) {
   iframe.classList.add('hidden');
   document.getElementById('playerError').classList.add('hidden');
   document.getElementById('tapToPlayOverlay').classList.add('hidden');
-  showPlayerLoading(`Connecting to ${stream.label}...`);
+  showPlayerLoading(needsProxy ? `Connecting via HTTPS proxy (${stream.label})...` : `Connecting to ${stream.label}...`);
 
-  const isDash = stream.type === 'dash' || /\.mpd(\?|$)/i.test(url);
-  const isTsFlv = !isDash && /\.(ts|flv)(\?|$)/i.test(url);
+  const isDash = stream.type === 'dash' || /\.mpd(\?|$)/i.test(rawUrl);
+  const isTsFlv = !isDash && /\.(ts|flv)(\?|$)/i.test(rawUrl);
   const isHls = !isDash && !isTsFlv;
 
-  document.getElementById('playerStreamStatus').textContent = `Playing ${stream.label} (${index + 1}/${ctx.streams.length})`;
-  document.getElementById('playerProtocolBadge').textContent = isDash ? 'DASH' : (/^https:\/\//i.test(url) ? 'HTTPS' : 'HTTP');
-
-  // Mixed Content early detection
-  if (window.location.protocol === 'https:' && /^http:\/\//i.test(url) && !url.includes('/api/proxy')) {
-    handleStreamFailure('mixed_content', 'Browser blocked this HTTP stream on an HTTPS page (Mixed Content). Connect your proxy in Settings.');
-    return;
-  }
+  document.getElementById('playerStreamStatus').textContent = `Playing ${stream.label} (${index + 1}/${ctx.streams.length})${needsProxy ? ' • HTTPS Proxy' : ''}`;
+  document.getElementById('playerProtocolBadge').textContent = isDash
+    ? (needsProxy ? 'DASH PROXY' : 'DASH')
+    : (needsProxy ? 'HTTPS PROXY' : (/^https:\/\//i.test(rawUrl) ? 'HTTPS' : 'HTTP'));
 
   // Always start muted + playsInline so autoplay is never blocked
   video.muted = true;
@@ -363,7 +371,7 @@ async function playContextStream(index) {
   } 
   // ==================== MPEG-TS / FLV PLAYBACK ====================
   else if (isTsFlv && window.mpegts && mpegts.isSupported()) {
-    mpegtsInstance = mpegts.createPlayer({ type: url.includes('.flv') ? 'flv' : 'mpegts', isLive: true, url });
+    mpegtsInstance = mpegts.createPlayer({ type: rawUrl.includes('.flv') ? 'flv' : 'mpegts', isLive: true, url });
     mpegtsInstance.attachMediaElement(video);
     mpegtsInstance.load();
     hidePlayerLoading();
@@ -404,6 +412,20 @@ function unmuteVideo() {
 function handleStreamFailure(reason, detail) {
   const ctx = activePlayerContext;
   if (!ctx) return;
+
+  const currentStream = ctx.streams[ctx.index];
+
+  // Auto-retry direct HTTPS streams through the built-in Vercel /api/proxy if blocked by CORS or 403
+  if (
+    currentStream &&
+    !currentStream._proxied &&
+    window.location.protocol !== 'file:' &&
+    (reason === 'cors_or_network' || reason === 'cors_403' || reason === 'dash_error' || reason === 'dash_load_failed' || reason === 'offline')
+  ) {
+    showToast('Direct stream blocked — retrying via HTTPS proxy...', 'info');
+    playContextStream(ctx.index, true);
+    return;
+  }
 
   // Automatic fallback to next stream if available
   if (ctx.index + 1 < ctx.streams.length && autoFallbackCount < 3) {
@@ -487,7 +509,9 @@ function showPlayerError(title, desc) {
 function retryCurrentStream() {
   if (!activePlayerContext) return;
   autoFallbackCount = 0;
-  playContextStream(activePlayerContext.index);
+  const s = activePlayerContext.streams[activePlayerContext.index];
+  if (s) s._proxied = false;
+  playContextStream(activePlayerContext.index, false);
 }
 
 function tryNextStreamManual() {
